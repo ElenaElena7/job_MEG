@@ -1,0 +1,199 @@
+library(emmeans)
+library(MASS)
+library(stringi)
+library(data.table)
+library(readr)
+library(dplyr)
+library(purrr)
+library(Matrix)
+library(reshape2)
+library(ggplot2)
+library(ggpubr)
+library(lme4)
+library(ggpubr)
+library(emmeans)
+library(lmerTest)
+library(plotrix)
+library(stringi)
+library(gridExtra)
+library(ggprism)
+library(dplyr)
+library(ggsignif)
+options(scipen = 999)
+library(ggpattern)
+library(cowplot)
+library(LMERConvenienceFunctions)
+
+
+
+path<- "E:/programming for work/theta graph 26.01.24/LMEM_tebl_all_to_W029_interval_0.8_day_1" # 
+
+
+read_plus <- function(flnm) {
+  read_csv(flnm) %>% 
+    mutate(filename = flnm)
+}
+df <-list.files(path,pattern = "*.csv", full.names = T) %>% 
+  map_df(~read_plus(.))
+
+
+
+sensors_all<- fread('E:/programming for work/theta graph 26.01.24/need_sensors/0.1_0.8_several/MEG1122_MEG1132_MEG1332_MEG1342_MEG1432_MEG1442 _0.1_0.8 parietalis_R .csv')
+
+
+sensor_info <- fread('E:/programming for work/sensors.csv', header = TRUE)
+names(sensor_info)[1] <- 'sensor'
+
+
+files <- data.table(full_filename=list.files(path, pattern = '*.csv', full.names = T))# объект files становится data.table, содержащим информацию о всех файлах с расширением .csv в указанной директории.
+files$short_filename <- list.files(path, pattern = '*.csv', full.names = F)
+
+
+
+files[, sensor:=stri_extract_first_regex(short_filename,"[0-9]+")]
+files$sensor <- as.integer(files$sensor)
+files <- merge.data.table(files,sensor_info,by = c('sensor'))
+names(files)[4] <- 'sensor_name'
+subj_list<- as.data.frame(unique(df$subject))
+
+
+##### filter files and leave needed sensors only ######
+
+
+files <- files[sensor_name %in% sensors_all$sensor_name] 
+
+
+temp <- fread(files[sensor==files$sensor[1]]$full_filename)# выбор одного сенсора для рыбы beta
+temp$V1 <- NULL
+beta <- setNames(data.table(matrix(nrow = 0, ncol = length(colnames(temp))+2)), c(colnames(temp),'sensor','sensor_name'))
+
+##чтобы прочесть данные из нескольких сенсоров
+for (i in files$sensor){
+  temp <- fread(files[sensor==i]$full_filename)
+  temp$V1 <- NULL
+  temp <- as.data.table(temp)
+  temp <- temp[subject %in% subj_list$`unique(df$subject)`]
+  
+  temp$sensor <- i
+  temp$sensor_name <- files[sensor==i]$sensor_name
+  
+  beta <- rbind(beta,temp)
+}
+
+
+
+colnames(beta)# найти имя нужного столбца
+#colnames(beta)[5] <- 'theta power [0.0 0.4]'# переименовать если столбец некрасиво выглядит со многоми степенями 
+col_name <- names(beta)[4]# проставить индекс столбца с нужным интервалом мое (и проверить правильный ли)
+interval_need <- gsub(".*(\\[.*\\]).*", "\\1", col_name)# мое выбираю только интервал с цифрами
+
+
+
+
+beta[,paste('mean theta power', interval_need):=rowMeans(beta[,.SD,.SDcol=c(col_name)])] # mean of intervals 
+
+
+beta[, index := 1:.N, by=c('subject','sensor')] #set indexes of all trials of each subject, same for all sensors 
+
+### если нужно записать таблицу в файл
+#write.csv(beta, "E:/programming for work/theta graph 26.01.24/files_send/parietalis_R_0.1_0.8.csv", row.names = FALSE)
+
+means <- beta[, mean(get(paste('mean theta power', interval_need))),by=c('subject','index', 'stim_type', 'round')]# compute means of sensors мой  добавила 2 столбца
+##усреднение идет по сенсорам
+
+
+means$US_type <- ifelse(grepl("_", means$stim_type), sapply(strsplit(means$stim_type, "_"), `[`, 2), "CS_minus") 
+means$CS_type <- sub("_.*", "", means$stim_type) 
+means$CS_type<- as.factor(means$CS_type)
+means$US_type<- as.factor(means$US_type)
+means$subject<- as.factor(means$subject)
+
+
+means[is.na(means) | means=="Inf"] = NA
+
+
+###### !!! remove runs for 1 day ######
+#удаляем 1 ран оставляем только активные блоки
+df1 <- means[means$round!= "run1", ]
+
+
+
+
+
+
+
+###### Удаляю выбросы
+#m <- lmer(V1 ~ CS_type*US_type + (1|subject), data =df1) # main part, fit model!
+#d<-romr.fnc(m, df1, trim = 2) ##### remove outliers 
+#data<- d$data 
+#data1 <- data[, -ncol(data), with = FALSE]
+
+
+
+m <- lmer(V1 ~ CS_type*US_type + as.factor(round) + (1|subject), data = df1)# моя модель
+
+
+### Take the marginal means from the model ########
+emm_options(pbkrtest.limit = 5000)#  ускорить вычисления, связанные с pbkrtest
+
+
+marginal_em <- emmeans(m, ~ as.factor(US_type|CS_type) * as.factor(round), level = 0.99)
+
+marginal_em<- as.data.frame(marginal_em)
+
+
+
+
+
+collapsed_data <- marginal_em %>%
+  group_by(round) %>%  # Группируем по интересующим нас факторам
+  summarise(
+    emmean = mean(emmean),                  # Среднее значение маргинальных средних
+    SE = mean(SE),                          # Среднее стандартное отклонение
+    lower.CL = mean(asymp.LCL),             # Среднее значение нижнего доверительного интервала
+    upper.CL = mean(asymp.UCL)              # Среднее значение верхнего доверительного интервала
+  )
+
+
+
+# первый фактор (CS_type) рассматривается как фиксированный  а второй фактор (US_type) как случайный
+Tuk<-data.table(summary(emmeans(m, pairwise ~ round, adjust = 'tukey',lmer.df = "satterthwaite"))$contrasts)
+#Рассчитывает попарные различия средних с учетом влияния множественных сравнений с использованием поправки Тьюки для модели m
+Tuk <- Tuk[, group1:=gsub(' -.*', '', contrast)][, group2:=gsub('.*- ', '', contrast)]# добавляет два новых столбца group1 и group2
+Tuk <- Tuk[p.value<0.1, p_significant:=format(p.value, digits = 3)]
+
+
+#n <- Tuk[!is.na(p_significant), .N]# будет содержать количество строк в Tuk, где столбец p_significant не содержит пропущенных значений.
+
+Tuk[p.value<0.001, stars:='***']
+Tuk[p.value<0.01 & p.value>0.001 , stars:='**']
+Tuk[p.value<0.05 & p.value>0.01 , stars:='*']
+Tuk[p.value>0.05 & p.value<0.1 , stars:='#']
+
+
+
+collapsed_data$stars <- c("", "", "#", "", "**")  # Звездочки для каждой точки надо подбирать вручную в соответствии Тьюки из таблицы Tuk
+
+
+
+ggplot(collapsed_data, aes(x = round, y = emmean)) +
+  geom_line(group = 1, color = "blue", size = 1) +  
+  geom_point(size = 3, color = "blue") +           
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +  # Усы
+  geom_text(aes(label = stars, y = upper.CL + 0.1), size = 6) +  
+  labs(x = "Активные блоки", y = "Изменение тета-мощности, дБ") +                 
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 14),         # Размер текста по оси X
+    axis.text.y = element_text(size = 14),         # Размер текста по оси Y
+    axis.title.x = element_text(size = 16),        # Размер подписи оси X
+    axis.title.y = element_text(size = 16)         # Размер подписи оси Y
+  )+
+# Добавление линий для звездочек выбирается вручную
+geom_segment(aes(x = 1, xend = 5, y = 1.8, yend = 1.8), size = 0.5) + 
+  #geom_segment(aes(x = 1.7, xend = 2.3, y = 0.4, yend = 0.4), size = 1) +
+  geom_segment(aes(x = 1, xend = 3, y = 1.7, yend = 1.7), size = 0.5)   
+
+
+
+
