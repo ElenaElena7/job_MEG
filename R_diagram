@@ -158,7 +158,7 @@ collapsed_data <- marginal_em %>%
 
 # первый фактор (CS_type) рассматривается как фиксированный  а второй фактор (US_type) как случайный
 Tuk<-data.table(summary(emmeans(m, pairwise ~ round, adjust = 'tukey',lmer.df = "satterthwaite"))$contrasts)
-#Рассчитывает попарные различия средних с учетом влияния множественных сравнений с использованием поправки Тьюки для модели m
+#Рассчитывает попарные различия средних с учетом влияния множественных сравнений с использованием Тьюки для модели m
 Tuk <- Tuk[, group1:=gsub(' -.*', '', contrast)][, group2:=gsub('.*- ', '', contrast)]# добавляет два новых столбца group1 и group2
 Tuk <- Tuk[p.value<0.1, p_significant:=format(p.value, digits = 3)]
 
